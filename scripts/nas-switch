@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [[ -L "$SCRIPT_PATH" ]]; do
+  SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+  [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="${SCRIPT_DIR}/${SCRIPT_PATH}"
+done
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
+
+# shellcheck source=scripts/lib/common.sh
+source "${SCRIPT_DIR}/lib/common.sh"
+
+main() {
+  load_config
+
+  local new_workspace="${1:-}" old_mount_path
+  [[ -n "$new_workspace" ]] || die "Usage: nas-switch <workspace>"
+
+  old_mount_path="$(local_mount_path)"
+  info "Switching workspace to ${new_workspace}"
+
+  if is_mounted "$old_mount_path"; then
+    "${SCRIPT_DIR}/nas-unmount"
+  fi
+
+  set_config_value WORKSPACE "$new_workspace"
+  WORKSPACE="$new_workspace"
+
+  if [[ -d "$old_mount_path" ]]; then
+    info "Previous mount path preserved at ${old_mount_path}"
+  fi
+
+  if [[ -n "${2:-}" && "${2:-}" == "--no-mount" ]]; then
+    info "Workspace updated. Run nas-mount when ready."
+    exit 0
+  fi
+
+  "${SCRIPT_DIR}/nas-mount"
+}
+
+main "$@"

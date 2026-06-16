@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [[ -L "$SCRIPT_PATH" ]]; do
+  SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+  [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="${SCRIPT_DIR}/${SCRIPT_PATH}"
+done
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
+
+# shellcheck source=scripts/lib/common.sh
+source "${SCRIPT_DIR}/lib/common.sh"
+
+main() {
+  load_config
+
+  local mount_path pid
+  mount_path="$(local_mount_path)"
+  pid="$(read_pid || true)"
+
+  info "Unmounting ${mount_path}"
+  unmount_path "$mount_path"
+
+  if [[ -n "${pid:-}" ]] && pid_is_alive "$pid"; then
+    kill "$pid" >/dev/null 2>&1 || true
+    sleep 1
+    pid_is_alive "$pid" && kill -9 "$pid" >/dev/null 2>&1 || true
+  fi
+
+  clear_pid
+  info "Unmount complete"
+}
+
+main "$@"

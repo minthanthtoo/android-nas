@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [[ -L "$SCRIPT_PATH" ]]; do
+  SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+  [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="${SCRIPT_DIR}/${SCRIPT_PATH}"
+done
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
+
+# shellcheck source=scripts/lib/common.sh
+source "${SCRIPT_DIR}/lib/common.sh"
+
+main() {
+  require_command rclone
+  load_config
+
+  REMOTE="$(detect_remote)"
+  local mount_path remote_workspace pid
+
+  mount_path="$(local_mount_path)"
+  remote_workspace="$(remote_workspace_path "$REMOTE")"
+
+  mkdir -p "$mount_path"
+
+  if is_mounted "$mount_path"; then
+    info "NAS is already mounted at ${mount_path}"
+    exit 0
+  fi
+
+  ensure_remote_root_reachable "$REMOTE"
+  ensure_remote_workspace_exists "$REMOTE"
+
+  info "Mounting ${remote_workspace} -> ${mount_path}"
+
+  nohup rclone mount "$remote_workspace" "$mount_path" \
+    --vfs-cache-mode full \
+    --dir-cache-time 10s \
+    --poll-interval 15s \
+    --log-level INFO \
+    --log-file "$LOG_FILE" \
+    >/dev/null 2>&1 &
+
+  pid="$!"
+  write_pid "$pid"
+
+  for _ in $(seq 1 20); do
+    if is_mounted "$mount_path"; then
+      info "Mounted successfully"
+      exit 0
+    fi
+
+    if ! pid_is_alive "$pid"; then
+      clear_pid
+      [[ -f "$LOG_FILE" ]] && tail -n 20 "$LOG_FILE" >&2
+      die "rclone mount exited before the mount became active."
+    fi
+
+    sleep 1
+  done
+
+  warn "Mount did not become active within the expected window."
+  kill "$pid" >/dev/null 2>&1 || true
+  clear_pid
+  [[ -f "$LOG_FILE" ]] && tail -n 20 "$LOG_FILE" >&2
+  exit 1
+}
+
+main "$@"

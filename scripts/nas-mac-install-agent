@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [[ -L "$SCRIPT_PATH" ]]; do
+  SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+  [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="${SCRIPT_DIR}/${SCRIPT_PATH}"
+done
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
+
+# shellcheck source=scripts/lib/common.sh
+source "${SCRIPT_DIR}/lib/common.sh"
+
+PLIST_PATH="${HOME}/Library/LaunchAgents/com.android-nas.usb-watch.plist"
+
+main() {
+  local watch_bin log_dir
+
+  load_config
+  watch_bin="${HOME}/.local/bin/nas-mac-usb-watch"
+  log_dir="${STATE_DIR}"
+
+  [[ -x "$watch_bin" ]] || die "Missing executable: ${watch_bin}. Run scripts/setup-nas-mac.sh first."
+
+  mkdir -p "$(dirname "$PLIST_PATH")" "$log_dir"
+
+  cat >"$PLIST_PATH" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.android-nas.usb-watch</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${watch_bin}</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>${log_dir}/usb-watch.log</string>
+  <key>StandardErrorPath</key>
+  <string>${log_dir}/usb-watch.err</string>
+</dict>
+</plist>
+EOF
+
+  launchctl unload "$PLIST_PATH" >/dev/null 2>&1 || true
+  launchctl load "$PLIST_PATH"
+
+  info "Installed and started LaunchAgent"
+  printf 'Agent: %s\n' "$PLIST_PATH"
+}
+
+main "$@"

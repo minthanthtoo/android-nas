@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [[ -L "$SCRIPT_PATH" ]]; do
+  SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+  [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="${SCRIPT_DIR}/${SCRIPT_PATH}"
+done
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
+
+# shellcheck source=scripts/lib/common.sh
+source "${SCRIPT_DIR}/lib/common.sh"
+
+main() {
+  local interval="${NAS_WATCH_INTERVAL:-10}" last_usb_root="" usb_root remote=""
+  local current_primary_state="" previous_primary_state="" current_usb_state="" previous_usb_state=""
+  local current_risk_state="" previous_risk_state="" should_refresh_usb="0"
+
+  require_command rclone
+  load_config
+
+  info "Watching for USB insertion. Interval: ${interval}s"
+
+  while true; do
+    previous_primary_state="$(availability_load_value PRIMARY_STATE || true)"
+    previous_usb_state="$(availability_load_value USB_STATE || true)"
+    previous_risk_state="$(availability_load_value RISK_STATE || true)"
+    current_risk_state="normal"
+
+    if usb_root="$(detect_usb_root_macos)"; then
+      current_usb_state="available"
+      should_refresh_usb="0"
+
+      if [[ "$usb_root" != "$last_usb_root" ]]; then
+        info "USB detected at ${usb_root}"
+        "${SCRIPT_DIR}/nas-usb-mount"
+        last_usb_root="$usb_root"
+        should_refresh_usb="1"
+      fi
+
+      if remote="$(detect_remote 2>/dev/null)" && remote_root_reachable "$remote"; then
+        current_primary_state="available"
+        if [[ "$previous_primary_state" != "available" ]]; then
+          should_refresh_usb="1"
+        fi
+
+        if [[ "$should_refresh_usb" == "1" ]]; then
+          info "Mobile reachable; refreshing USB from primary"
+          "${SCRIPT_DIR}/nas-mobile-usb-sync" push-primary all || warn "Primary-to-USB refresh failed"
+        fi
+      elif usb_primary_sync_complete "$usb_root"; then
+        current_primary_state="unavailable"
+        info "Mobile unavailable; USB last completed primary sync: $(usb_primary_sync_timestamp "$usb_root")"
+      else
+        current_primary_state="unavailable"
+        current_risk_state="usb_untrusted_without_primary"
+      fi
+    else
+      current_usb_state="unavailable"
+
+      if [[ -n "$last_usb_root" ]]; then
+        info "USB removed"
+        macos_popup_warning "Android NAS warning" "USB secondary is unavailable."
+        last_usb_root=""
+      fi
+
+      if remote="$(detect_remote 2>/dev/null)" && remote_root_reachable "$remote"; then
+        current_primary_state="available"
+      else
+        current_primary_state="unavailable"
+        current_risk_state="no_primary_no_usb"
+      fi
+    fi
+
+    if [[ "$current_primary_state" != "$previous_primary_state" ]]; then
+      availability_set_value PRIMARY_STATE "$current_primary_state"
+      if [[ "$previous_primary_state" == "available" ]]; then
+        macos_popup_warning "Android NAS warning" "Primary mobile is unavailable."
+      fi
+    fi
+
+    if [[ "$current_usb_state" != "$previous_usb_state" ]]; then
+      availability_set_value USB_STATE "$current_usb_state"
+    fi
+
+    if [[ "$current_risk_state" != "$previous_risk_state" ]]; then
+      availability_set_value RISK_STATE "$current_risk_state"
+      if [[ "$current_risk_state" == "usb_untrusted_without_primary" ]]; then
+        macos_popup_warning "Android NAS warning" "USB joined, but mobile primary is unavailable and the USB has no completed primary sync timestamp."
+      fi
+    fi
+
+    sleep "$interval"
+  done
+}
+
+main "$@"

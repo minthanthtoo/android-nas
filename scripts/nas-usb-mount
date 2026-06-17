@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [[ -L "$SCRIPT_PATH" ]]; do
+  SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+  [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="${SCRIPT_DIR}/${SCRIPT_PATH}"
+done
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
+
+# shellcheck source=scripts/lib/common.sh
+source "${SCRIPT_DIR}/lib/common.sh"
+
+main() {
+  load_config
+
+  local usb_root remote=""
+  usb_root="$(detect_usb_root_macos)" || die "USB root not found. Expected /Volumes/<disk>/${USB_SUBDIR} or set USB_ROOT."
+
+  mkdir -p "$(dirname "$USB_LINK_PATH")" "$usb_root"
+  ln -sfn "$usb_root" "$USB_LINK_PATH"
+  write_usb_access_manifest "$usb_root"
+
+  info "USB secondary attached through stable client link"
+  printf 'USB root : %s\n' "$usb_root"
+  printf 'Work path: %s\n' "$USB_LINK_PATH"
+  printf 'Access   : %s\n' "$(usb_access_manifest "$usb_root")"
+
+  if remote="$(detect_remote 2>/dev/null)" && remote_root_reachable "$remote"; then
+    info "Primary mobile is reachable; USB can be refreshed by nas-mobile-usb-sync push-primary."
+  elif usb_primary_sync_complete "$usb_root"; then
+    info "USB has completed primary sync timestamp: $(usb_primary_sync_timestamp "$usb_root")"
+  else
+    macos_popup_warning "Android NAS warning" "Primary mobile is unavailable and this USB has no completed primary sync timestamp."
+  fi
+}
+
+main "$@"

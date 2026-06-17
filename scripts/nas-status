@@ -13,6 +13,9 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
 
 main() {
+  local remote_reachable="0" mount_active="0" primary_state secondary_state
+  local usb_root="" sync_timestamp="" sync_age=""
+
   load_config
   require_command rclone
 
@@ -22,12 +25,14 @@ main() {
   printf '\n'
 
   if remote_root_reachable "$REMOTE"; then
+    remote_reachable="1"
     printf 'Remote     : reachable\n'
   else
     printf 'Remote     : unreachable\n'
   fi
 
   if is_mounted "$(local_mount_path)"; then
+    mount_active="1"
     printf 'Mount      : active\n'
   else
     printf 'Mount      : inactive\n'
@@ -43,6 +48,41 @@ main() {
     fi
   else
     printf 'PID        : none\n'
+  fi
+
+  primary_state="$(availability_load_value PRIMARY_STATE || printf 'unknown')"
+  secondary_state="$(availability_load_value USB_STATE || printf 'unknown')"
+
+  printf 'Primary    : %s\n' "$primary_state"
+  printf 'Secondary  : %s\n' "$secondary_state"
+  printf 'Source     : %s\n' "${SOURCE_POLICY}"
+
+  if usb_root="$(detect_usb_root_macos 2>/dev/null)"; then
+    printf 'USB root    : %s\n' "$usb_root"
+    if usb_primary_sync_complete "$usb_root"; then
+      sync_timestamp="$(usb_primary_sync_timestamp "$usb_root" || true)"
+      sync_age="$(usb_primary_sync_age_hours "$usb_root" || true)"
+      printf 'USB sync    : complete (%s, %sh old)\n' "${sync_timestamp:-unknown}" "${sync_age:-unknown}"
+    else
+      printf 'USB sync    : no completed primary sync manifest\n'
+    fi
+  fi
+
+  printf '\nNext action : '
+  if [[ "$remote_reachable" == "1" && "$mount_active" == "0" ]]; then
+    printf 'run nas-mount to use the mobile primary workspace\n'
+  elif [[ "$remote_reachable" == "1" && "$secondary_state" == "available" ]]; then
+    printf 'run nas-mobile-usb-sync push-primary all to refresh the USB secondary from the primary\n'
+  elif [[ "$remote_reachable" == "0" && "$secondary_state" == "available" ]]; then
+    if [[ -n "$usb_root" ]] && usb_primary_sync_complete "$usb_root"; then
+      printf 'run nas-usb-attach to use the USB continuity copy; recover to primary only with nas-mobile-usb-sync recover-primary ... --yes\n'
+    else
+      printf 'do not trust the USB as source yet; wait for the primary or refresh the USB from primary before relying on it\n'
+    fi
+  elif [[ "$remote_reachable" == "0" ]]; then
+    printf 'restore connectivity to the mobile primary or attach a known-good USB secondary\n'
+  else
+    printf 'system is usable; run nas-doctor if you want a deeper check\n'
   fi
 }
 

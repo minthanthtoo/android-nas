@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [[ -L "$SCRIPT_PATH" ]]; do
+  SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+  [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="${SCRIPT_DIR}/${SCRIPT_PATH}"
+done
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
+
+# shellcheck source=scripts/lib/common.sh
+source "${SCRIPT_DIR}/lib/common.sh"
+
+check() {
+  local label="$1"
+  shift
+
+  if "$@" >/dev/null 2>&1; then
+    printf '[OK]   %s\n' "$label"
+  else
+    printf '[WARN] %s\n' "$label"
+  fi
+}
+
+main() {
+  local remote="" usb_root="" remote_reachable="0"
+
+  printf 'Android NAS macOS doctor\n\n'
+
+  check "rclone installed" command -v rclone
+  check "config exists" test -f "$CONFIG_FILE"
+
+  if [[ -f "$CONFIG_FILE" ]]; then
+    load_config
+    if remote="$(detect_remote 2>/dev/null)"; then
+      printf '[OK]   rclone remote detected: %s\n' "$remote"
+      if remote_root_reachable "$remote"; then
+        remote_reachable="1"
+        printf '[OK]   mobile primary reachable\n'
+      else
+        printf '[WARN] mobile primary reachable\n'
+      fi
+    else
+      printf '[WARN] rclone remote detected\n'
+    fi
+
+    if usb_root="$(detect_usb_root_macos 2>/dev/null)"; then
+      printf '[OK]   USB secondary detected: %s\n' "$usb_root"
+      if usb_primary_sync_complete "$usb_root"; then
+        printf '[OK]   USB primary sync timestamp: %s\n' "$(usb_primary_sync_timestamp "$usb_root")"
+        printf '[OK]   USB primary sync age: %sh\n' "$(usb_primary_sync_age_hours "$usb_root" || printf 'unknown')"
+      else
+        printf '[WARN] USB primary sync timestamp missing\n'
+      fi
+    else
+      printf '[WARN] USB secondary detected\n'
+    fi
+  fi
+
+  check "LaunchAgent installed" test -f "${HOME}/Library/LaunchAgents/com.android-nas.usb-watch.plist"
+  check "helper command on PATH" command -v nas-mount
+  printf '[INFO] source policy: %s\n' "${SOURCE_POLICY:-unknown}"
+  printf '[INFO] client cache mode: %s\n' "${CLIENT_CACHE_MODE:-unknown}"
+  printf '[INFO] primary availability state: %s\n' "$(availability_load_value PRIMARY_STATE || printf 'unknown')"
+  printf '[INFO] secondary availability state: %s\n' "$(availability_load_value USB_STATE || printf 'unknown')"
+
+  printf '\nRecommended next step\n'
+  if [[ "$remote_reachable" == "1" ]]; then
+    printf '  nas-mount\n'
+    if [[ -n "$usb_root" ]]; then
+      printf '  nas-mobile-usb-sync push-primary all\n'
+    fi
+  elif [[ -n "$usb_root" ]] && usb_primary_sync_complete "$usb_root"; then
+    printf '  nas-usb-attach\n'
+  elif [[ -n "$usb_root" ]]; then
+    printf '  wait for the mobile primary before trusting this USB copy\n'
+  else
+    printf '  restore mobile connectivity or insert the USB secondary\n'
+  fi
+}
+
+main "$@"

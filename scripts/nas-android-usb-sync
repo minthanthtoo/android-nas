@@ -1,0 +1,161 @@
+#!/data/data/com.termux/files/usr/bin/bash
+set -euo pipefail
+
+NAS_ROOT="${NAS_ROOT:-/storage/emulated/0/nas}"
+USB_SUBDIR="${USB_SUBDIR:-android-nas}"
+USB_ROOT="${USB_ROOT:-}"
+MANIFEST_DIR_NAME=".android-nas"
+ANDROID_CONFIG_FILE="${HOME}/.config/android-nas/android.env"
+ANDROID_NOTIFY_INFO="${ANDROID_NOTIFY_INFO:-1}"
+ANDROID_NOTIFY_WARN="${ANDROID_NOTIFY_WARN:-1}"
+
+info() {
+  printf '[INFO] %s\n' "$*"
+}
+
+warn() {
+  printf '[WARN] %s\n' "$*" >&2
+}
+
+die() {
+  printf '[ERROR] %s\n' "$*" >&2
+  notify "Android NAS sync failed" "$*" warn
+  exit 1
+}
+
+notify() {
+  local title="$1"
+  local body="$2"
+  local level="${3:-info}"
+
+  if [[ "$level" == "info" && "${ANDROID_NOTIFY_INFO}" != "1" ]]; then
+    return 0
+  fi
+
+  if [[ "$level" == "warn" && "${ANDROID_NOTIFY_WARN}" != "1" ]]; then
+    return 0
+  fi
+
+  if command -v termux-notification >/dev/null 2>&1; then
+    termux-notification --title "$title" --content "$body" >/dev/null 2>&1 || true
+  fi
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
+}
+
+load_android_config() {
+  if [[ -f "$ANDROID_CONFIG_FILE" ]]; then
+    # shellcheck disable=SC1090
+    source "$ANDROID_CONFIG_FILE"
+  fi
+
+  : "${NAS_ROOT:=/storage/emulated/0/nas}"
+  : "${USB_SUBDIR:=android-nas}"
+  : "${USB_ROOT:=}"
+  : "${ANDROID_NOTIFY_INFO:=1}"
+  : "${ANDROID_NOTIFY_WARN:=1}"
+}
+
+detect_usb_root() {
+  local candidate
+
+  if [[ -n "$USB_ROOT" && -d "$USB_ROOT" ]]; then
+    printf '%s\n' "$USB_ROOT"
+    return 0
+  fi
+
+  for candidate in \
+    "${HOME}/storage/external-1/${USB_SUBDIR}" \
+    "/storage"/*/"${USB_SUBDIR}" \
+    "/mnt/media_rw"/*/"${USB_SUBDIR}"; do
+    [[ -d "$candidate" ]] || continue
+    printf '%s\n' "$candidate"
+    return 0
+  done
+
+  for candidate in "${HOME}/storage/external-1" "/storage"/* "/mnt/media_rw"/*; do
+    [[ -d "$candidate" && -w "$candidate" ]] || continue
+    mkdir -p "${candidate}/${USB_SUBDIR}" 2>/dev/null || continue
+    printf '%s\n' "${candidate}/${USB_SUBDIR}"
+    return 0
+  done
+
+  return 1
+}
+
+utc_now() {
+  date -u +"%Y-%m-%dT%H:%M:%SZ"
+}
+
+epoch_now() {
+  date +%s
+}
+
+write_primary_sync_manifest() {
+  local usb_root="$1"
+  local manifest_dir manifest_path
+
+  manifest_dir="${usb_root%/}/${MANIFEST_DIR_NAME}"
+  manifest_path="${manifest_dir}/primary-sync.env"
+  mkdir -p "$manifest_dir"
+
+  cat >"$manifest_path" <<EOF
+LAST_PRIMARY_SYNC_STATUS=complete
+LAST_PRIMARY_SYNC_EPOCH=$(epoch_now)
+LAST_PRIMARY_SYNC_UTC=$(utc_now)
+LAST_PRIMARY_SYNC_BY=$(printf '%q' "$(whoami)@android-termux")
+LAST_PRIMARY_SYNC_SOURCE=android
+LAST_PRIMARY_SYNC_SOURCE_PATH=$(printf '%q' "$NAS_ROOT")
+LAST_PRIMARY_SYNC_SCOPE=all
+USB_ROOT=$(printf '%q' "$usb_root")
+EOF
+}
+
+usage() {
+  cat <<'EOF'
+Usage: nas-android-usb-sync push|pull|status
+
+push   copy newer files from Android NAS to USB
+pull   copy newer files from USB to Android NAS
+status show detected paths
+EOF
+}
+
+main() {
+  local action="${1:-push}" usb_root
+
+  case "$action" in
+    push|pull|status) ;;
+    *) usage >&2; exit 1 ;;
+  esac
+
+  require_command rclone
+  load_android_config
+  mkdir -p "$NAS_ROOT"
+
+  usb_root="$(detect_usb_root)" || die "USB root not found. Expected a writable USB path containing ${USB_SUBDIR}."
+
+  if [[ "$action" == "status" ]]; then
+    printf 'NAS root : %s\n' "$NAS_ROOT"
+    printf 'USB root : %s\n' "$usb_root"
+    exit 0
+  fi
+
+  notify "Android NAS sync started" "${action}: ${NAS_ROOT} <-> ${usb_root}" info
+
+  if [[ "$action" == "push" ]]; then
+    info "Copying newer files Android -> USB"
+    rclone copy "$NAS_ROOT" "$usb_root" --update --progress
+    write_primary_sync_manifest "$usb_root"
+  else
+    info "Copying newer files USB -> Android"
+    rclone copy "$usb_root" "$NAS_ROOT" --update --progress
+  fi
+
+  notify "Android NAS sync finished" "${action}: ${NAS_ROOT} <-> ${usb_root}" info
+  info "Sync complete"
+}
+
+main "$@"

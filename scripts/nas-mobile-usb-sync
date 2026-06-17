@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [[ -L "$SCRIPT_PATH" ]]; do
+  SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+  [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="${SCRIPT_DIR}/${SCRIPT_PATH}"
+done
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
+
+# shellcheck source=scripts/lib/common.sh
+source "${SCRIPT_DIR}/lib/common.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: nas-mobile-usb-sync [push-primary|recover-primary] [workspace|all] [--force] [--yes]
+
+push-primary    refresh the USB secondary from the mobile primary
+recover-primary copy newer files from the USB secondary back to the mobile primary
+
+Deletes are not propagated in either direction.
+Recovery safeguards:
+  - requires --yes
+  - refuses when the primary is reachable unless --force is supplied
+  - refuses when the USB has no completed primary sync manifest unless --force is supplied
+  - warns when the USB primary sync manifest is older than USB_SYNC_MAX_AGE_HOURS
+EOF
+}
+
+push_primary_to_usb() {
+  local remote_path="$1"
+  local usb_path_value="$2"
+  local usb_root="$3"
+  local scope="$4"
+
+  mkdir -p "$usb_path_value"
+
+  info "Copying newer files mobile -> USB"
+  rclone copy "$remote_path" "$usb_path_value" --update --progress
+
+  write_usb_primary_sync_manifest "$usb_root" "$REMOTE" "$remote_path" "$scope"
+  info "Updated USB primary sync manifest: $(usb_primary_sync_manifest "$usb_root")"
+}
+
+recover_primary_from_usb() {
+  local remote_path="$1"
+  local usb_path_value="$2"
+
+  info "Copying newer files USB -> mobile"
+  rclone copy "$usb_path_value" "$remote_path" --update --progress
+}
+
+guard_recovery() {
+  local remote="$1"
+  local usb_root="$2"
+  local confirmed="$3"
+  local forced="$4"
+  local manifest_timestamp manifest_age_hours
+
+  [[ "$confirmed" == "1" ]] || die "Recovery is manual-only. Re-run with --yes after checking the USB snapshot."
+
+  if remote_root_reachable "$remote" && [[ "$forced" != "1" ]]; then
+    die "Primary is reachable. Recovery is blocked to avoid overwriting a live source. Re-run with --force --yes only if you intend to recover from USB."
+  fi
+
+  if ! usb_primary_sync_complete "$usb_root"; then
+    [[ "$forced" == "1" ]] || die "USB has no completed primary sync manifest. Recovery is blocked. Re-run with --force --yes only if you explicitly trust this USB copy."
+    warn "Continuing recovery without a completed primary sync manifest because --force was supplied."
+    return 0
+  fi
+
+  manifest_timestamp="$(usb_primary_sync_timestamp "$usb_root" || true)"
+  manifest_age_hours="$(usb_primary_sync_age_hours "$usb_root" || true)"
+
+  if ! usb_primary_sync_is_fresh "$usb_root"; then
+    if [[ "$forced" != "1" ]]; then
+      die "USB primary sync manifest is stale (${manifest_age_hours:-unknown}h old, timestamp ${manifest_timestamp:-unknown}). Re-run with --force --yes only if you accept this recovery source."
+    fi
+    warn "Recovering from a stale USB snapshot (${manifest_age_hours:-unknown}h old at ${manifest_timestamp:-unknown}) because --force was supplied."
+  else
+    info "Recovering from USB snapshot at ${manifest_timestamp} (${manifest_age_hours}h old)"
+  fi
+}
+
+main() {
+  local mode="${1:-push-primary}" scope="${2:-workspace}" remote usb_root remote_path usb_path_value
+  local forced="0" confirmed="0" arg
+
+  [[ "$mode" == "push-primary" || "$mode" == "recover-primary" ]] || {
+    usage >&2
+    exit 1
+  }
+
+  [[ "$scope" == "workspace" || "$scope" == "all" ]] || {
+    usage >&2
+    exit 1
+  }
+
+  shift $(( $# > 0 ? 1 : 0 )) || true
+  shift $(( $# > 0 ? 1 : 0 )) || true
+
+  for arg in "$@"; do
+    case "$arg" in
+      --force)
+        forced="1"
+        ;;
+      --yes)
+        confirmed="1"
+        ;;
+      *)
+        usage >&2
+        exit 1
+        ;;
+    esac
+  done
+
+  require_command rclone
+  load_config
+
+  remote="$(detect_remote)"
+  ensure_remote_root_reachable "$remote"
+
+  usb_root="$(detect_usb_root_macos)" || die "USB root not found. Expected /Volumes/<disk>/${USB_SUBDIR} or set USB_ROOT."
+  mkdir -p "$usb_root"
+
+  if [[ "$scope" == "all" ]]; then
+    remote_path="$(remote_all_path "$remote")"
+    usb_path_value="$usb_root"
+  else
+    remote_path="$(remote_workspace_path "$remote")"
+    usb_path_value="$(usb_path "$usb_root")"
+  fi
+
+  if [[ "$mode" == "push-primary" ]]; then
+    push_primary_to_usb "$remote_path" "$usb_path_value" "$usb_root" "$scope"
+    info "Primary-to-USB refresh complete"
+  else
+    guard_recovery "$remote" "$usb_root" "$confirmed" "$forced"
+    recover_primary_from_usb "$remote_path" "$usb_path_value"
+    info "USB-to-primary recovery copy complete"
+  fi
+}
+
+main "$@"

@@ -1,0 +1,43 @@
+#!/data/data/com.termux/files/usr/bin/bash
+set -euo pipefail
+
+NAS_ROOT="${NAS_ROOT:-/storage/emulated/0/nas}"
+BOOT_SCRIPT="${HOME}/.termux/boot/start-android-nas"
+ANDROID_CONFIG_FILE="${HOME}/.config/android-nas/android.env"
+
+check() {
+  local label="$1"
+  shift
+
+  if "$@" >/dev/null 2>&1; then
+    printf '[OK]   %s\n' "$label"
+  else
+    printf '[WARN] %s\n' "$label"
+  fi
+}
+
+main() {
+  printf 'Android NAS Termux doctor\n\n'
+
+  check "running inside Termux" test -n "${PREFIX:-}"
+  check "rclone installed" command -v rclone
+  check "sshd installed" command -v sshd
+  check "sshd running" pgrep -x sshd
+  check "NAS root exists" test -d "$NAS_ROOT"
+  check "Termux shared storage exists" test -d "${HOME}/storage/shared"
+  check "Android config exists" test -f "$ANDROID_CONFIG_FILE"
+  check "boot script installed" test -x "$BOOT_SCRIPT"
+  check "USB watcher installed" command -v nas-android-usb-watch
+  check "USB watcher running" pgrep -f "nas-android-usb-watch"
+  check "Termux notification command installed" command -v termux-notification
+
+  printf '\nConnection hints\n'
+  printf '  User: %s\n' "$(whoami)"
+  printf '  Port: 8022\n'
+  if [[ -f "$ANDROID_CONFIG_FILE" ]]; then
+    printf '  Config: %s\n' "$ANDROID_CONFIG_FILE"
+  fi
+  ip -o -4 addr show wlan0 2>/dev/null || ip -o -4 addr show 2>/dev/null || true
+}
+
+main "$@"

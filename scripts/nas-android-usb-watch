@@ -1,0 +1,103 @@
+#!/data/data/com.termux/files/usr/bin/bash
+set -euo pipefail
+
+NAS_WATCH_INTERVAL="${NAS_WATCH_INTERVAL:-10}"
+STATE_DIR="${HOME}/.local/state/android-nas"
+LAST_USB_FILE="${STATE_DIR}/last-usb-root"
+ANDROID_CONFIG_FILE="${HOME}/.config/android-nas/android.env"
+NOTIFY_ID="30221"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+mkdir -p "$STATE_DIR"
+
+info() {
+  printf '[INFO] %s\n' "$*"
+}
+
+load_android_config() {
+  if [[ -f "$ANDROID_CONFIG_FILE" ]]; then
+    # shellcheck disable=SC1090
+    source "$ANDROID_CONFIG_FILE"
+  fi
+
+  : "${ANDROID_NOTIFY_INFO:=1}"
+  : "${ANDROID_NOTIFY_WARN:=1}"
+}
+
+notify() {
+  local title="$1"
+  local body="$2"
+  local level="${3:-info}"
+
+  if [[ "$level" == "info" && "${ANDROID_NOTIFY_INFO:-1}" != "1" ]]; then
+    return 0
+  fi
+
+  if [[ "$level" == "warn" && "${ANDROID_NOTIFY_WARN:-1}" != "1" ]]; then
+    return 0
+  fi
+
+  if command -v termux-notification >/dev/null 2>&1; then
+    termux-notification --title "$title" --content "$body" >/dev/null 2>&1 || true
+  fi
+}
+
+notify_ongoing() {
+  local body="$1"
+
+  if command -v termux-notification >/dev/null 2>&1; then
+    termux-notification \
+      --id "$NOTIFY_ID" \
+      --ongoing \
+      --title "Android NAS" \
+      --content "$body" \
+      --button1 "Push now" \
+      --button1-action "bash -lc 'nas-android-usb-sync push'" \
+      --button2 "Status" \
+      --button2-action "bash -lc 'termux-toast \"Run nas-android-doctor in Termux\"'" \
+      >/dev/null 2>&1 || true
+  fi
+}
+
+detect_usb_root() {
+  "${SCRIPT_DIR}/nas-android-usb-sync" status 2>/dev/null | awk -F': ' '/USB root/ { print $2; exit }'
+}
+
+main() {
+  local current_usb="" last_usb=""
+
+  load_android_config
+  [[ -f "$LAST_USB_FILE" ]] && last_usb="$(cat "$LAST_USB_FILE")"
+
+  info "Watching for USB insertion. Interval: ${NAS_WATCH_INTERVAL}s"
+  notify_ongoing "Watching for USB secondary"
+
+  while true; do
+    current_usb="$(detect_usb_root || true)"
+
+    if [[ -n "$current_usb" && "$current_usb" != "$last_usb" ]]; then
+      info "USB detected at ${current_usb}"
+      printf '%s\n' "$current_usb" >"$LAST_USB_FILE"
+      last_usb="$current_usb"
+      notify_ongoing "USB detected, refreshing secondary"
+      if "${SCRIPT_DIR}/nas-android-usb-sync" push; then
+        notify "Android NAS sync complete" "USB secondary refreshed from mobile primary" info
+        notify_ongoing "USB secondary is current"
+      else
+        notify "Android NAS sync failed" "Check Termux output" warn
+        notify_ongoing "USB secondary refresh failed"
+      fi
+    fi
+
+    if [[ -z "$current_usb" && -n "$last_usb" ]]; then
+      info "USB removed"
+      : >"$LAST_USB_FILE"
+      last_usb=""
+      notify_ongoing "Watching for USB secondary"
+    fi
+
+    sleep "$NAS_WATCH_INTERVAL"
+  done
+}
+
+main "$@"

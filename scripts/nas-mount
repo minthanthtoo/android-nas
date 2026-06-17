@@ -17,10 +17,11 @@ main() {
   load_config
 
   REMOTE="$(detect_remote)"
-  local mount_path remote_workspace pid
+  local mount_path remote_workspace pid rclone_cache_mode
 
   mount_path="$(local_mount_path)"
   remote_workspace="$(remote_workspace_path "$REMOTE")"
+  rclone_cache_mode="$(cache_mode_to_rclone_flag)"
 
   mkdir -p "$mount_path"
 
@@ -35,7 +36,7 @@ main() {
   info "Mounting ${remote_workspace} -> ${mount_path}"
 
   nohup rclone mount "$remote_workspace" "$mount_path" \
-    --vfs-cache-mode full \
+    --vfs-cache-mode "$rclone_cache_mode" \
     --dir-cache-time 10s \
     --poll-interval 15s \
     --log-level INFO \

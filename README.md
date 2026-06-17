@@ -244,6 +244,28 @@ flowchart LR
 
 ## Setup
 
+### One-command GitHub install
+
+macOS:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/minthanthtoo/android-nas/main/scripts/install-from-github.sh)
+```
+
+Android / Termux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/minthanthtoo/android-nas/main/scripts/install-from-github.sh | bash
+```
+
+The bootstrap downloads the repository into:
+
+```text
+~/.local/share/android-nas/repo
+```
+
+and then runs the platform-specific setup script from that local copy.
+
 ### Android primary setup
 
 Run on the Android phone in Termux:

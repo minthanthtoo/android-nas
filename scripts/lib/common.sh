@@ -55,6 +55,8 @@ load_config() {
   : "${MAC_NOTIFY_INFO:=0}"
   : "${MAC_NOTIFY_WARN:=1}"
   : "${USB_SYNC_MAX_AGE_HOURS:=168}"
+  : "${RCLONE_PROBE_CONNECT_TIMEOUT:=5s}"
+  : "${RCLONE_PROBE_IO_TIMEOUT:=8s}"
 }
 
 shell_quote() {
@@ -349,6 +351,15 @@ write_pid() {
   printf '%s\n' "$1" >"$PID_FILE"
 }
 
+run_rclone_probe() {
+  rclone \
+    --contimeout "${RCLONE_PROBE_CONNECT_TIMEOUT}" \
+    --timeout "${RCLONE_PROBE_IO_TIMEOUT}" \
+    --retries 1 \
+    --low-level-retries 1 \
+    "$@"
+}
+
 is_mounted() {
   local mount_path="$1"
   mount | grep -F "on ${mount_path} (" >/dev/null 2>&1 || mount | grep -F " ${mount_path} " >/dev/null 2>&1
@@ -356,7 +367,7 @@ is_mounted() {
 
 remote_root_reachable() {
   local remote="$1"
-  rclone lsf "$(remote_base_path "$remote")" >/dev/null 2>&1
+  run_rclone_probe lsf "$(remote_base_path "$remote")" >/dev/null 2>&1
 }
 
 ensure_remote_root_reachable() {
@@ -407,5 +418,7 @@ USB subdir : ${USB_SUBDIR}
 Warn popup : ${MAC_NOTIFY_WARN}
 Info popup : ${MAC_NOTIFY_INFO}
 USB max age: ${USB_SYNC_MAX_AGE_HOURS}h
+Probe conn : ${RCLONE_PROBE_CONNECT_TIMEOUT}
+Probe I/O  : ${RCLONE_PROBE_IO_TIMEOUT}
 EOF
 }

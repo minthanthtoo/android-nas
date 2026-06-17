@@ -6,6 +6,7 @@ REPO_REF="${ANDROID_NAS_REPO_REF:-main}"
 INSTALL_BASE="${HOME}/.local/share/android-nas"
 INSTALL_ROOT="${INSTALL_BASE}/repo"
 TARBALL_URL="https://codeload.github.com/${REPO_SLUG}/tar.gz/${REPO_REF}"
+BOOTSTRAP_TMP_DIR=""
 
 info() {
   printf '[INFO] %s\n' "$*"
@@ -39,23 +40,23 @@ detect_platform() {
 }
 
 download_repo() {
-  local tmp_dir extract_root
+  local extract_root
 
   require_command curl
   require_command tar
 
-  tmp_dir="$(mktemp -d)"
-  trap 'rm -rf "$tmp_dir"' EXIT
+  BOOTSTRAP_TMP_DIR="$(mktemp -d)"
+  trap 'rm -rf "${BOOTSTRAP_TMP_DIR:-}"' EXIT
 
   mkdir -p "$INSTALL_BASE"
 
   info "Downloading ${REPO_SLUG}@${REPO_REF}"
-  curl -fsSL "$TARBALL_URL" -o "${tmp_dir}/repo.tar.gz"
+  curl -fsSL "$TARBALL_URL" -o "${BOOTSTRAP_TMP_DIR}/repo.tar.gz"
 
   info "Extracting repository"
-  tar -xzf "${tmp_dir}/repo.tar.gz" -C "$tmp_dir"
+  tar -xzf "${BOOTSTRAP_TMP_DIR}/repo.tar.gz" -C "$BOOTSTRAP_TMP_DIR"
 
-  extract_root="$(find "$tmp_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+  extract_root="$(find "$BOOTSTRAP_TMP_DIR" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
   [[ -n "$extract_root" ]] || die "Failed to locate extracted repository contents."
 
   rm -rf "$INSTALL_ROOT"

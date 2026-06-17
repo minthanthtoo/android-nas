@@ -92,6 +92,18 @@ EOF
 install_commands() {
   mkdir -p "$INSTALL_BIN_DIR"
 
+  chmod 700 \
+    "${REPO_ROOT}/scripts/nas-mount" \
+    "${REPO_ROOT}/scripts/nas-unmount" \
+    "${REPO_ROOT}/scripts/nas-switch" \
+    "${REPO_ROOT}/scripts/nas-status" \
+    "${REPO_ROOT}/scripts/nas-usb-mount" \
+    "${REPO_ROOT}/scripts/nas-usb-attach" \
+    "${REPO_ROOT}/scripts/nas-mobile-usb-sync" \
+    "${REPO_ROOT}/scripts/nas-mac-usb-watch" \
+    "${REPO_ROOT}/scripts/nas-mac-install-agent" \
+    "${REPO_ROOT}/scripts/nas-doctor"
+
   ln -sfn "${REPO_ROOT}/scripts/nas-mount" "${INSTALL_BIN_DIR}/nas-mount"
   ln -sfn "${REPO_ROOT}/scripts/nas-unmount" "${INSTALL_BIN_DIR}/nas-unmount"
   ln -sfn "${REPO_ROOT}/scripts/nas-switch" "${INSTALL_BIN_DIR}/nas-switch"
